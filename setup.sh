@@ -620,7 +620,7 @@ DOCKER_COMPOSE_CONTENT='version: "3.8"
 
 services:
   node:
-    image: ritualnetwork/infernet-node:v1.4.0
+    image: ritualnetwork/infernet-node:latest
     container_name: ritual-node
     restart: always
     ports:
@@ -651,9 +651,9 @@ networks:
     driver: bridge'
 
 if create_file_safely "$DOCKER_COMPOSE" "$DOCKER_COMPOSE_CONTENT"; then
-    status_success "Created docker-compose.yaml"
+    status_success "Created docker-compose.yaml with updated image versions"
 else
-    status_warning "Failed to create docker-compose.yaml"
+    status_warning "Failed to update docker-compose.yaml"
 fi
 
 # Create root Makefile
@@ -726,8 +726,11 @@ else
     FORGE_CMD="forge"
 fi
 
-execute_command "cd $REPO_PATH/projects/hello-world/contracts && $FORGE_CMD install --no-commit foundry-rs/forge-std" "Install forge-std" "show_output"
-execute_command "cd $REPO_PATH/projects/hello-world/contracts && $FORGE_CMD install --no-commit ritual-net/infernet-sdk" "Install infernet-sdk" "show_output"
+# Replace with proper git initialization for Foundry
+status_info "Properly initializing Foundry contracts with git"
+execute_command "cd $REPO_PATH/projects/hello-world/contracts && git init" "Initialize git repository"
+execute_command "cd $REPO_PATH/projects/hello-world/contracts && $FORGE_CMD install --no-commit foundry-rs/forge-std" "Install forge-std properly" "show_output"
+execute_command "cd $REPO_PATH/projects/hello-world/contracts && $FORGE_CMD install --no-commit ritual-net/infernet-sdk" "Install infernet-sdk properly" "show_output"
 
 section "DEPLOYING NODE"
 
