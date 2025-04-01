@@ -184,6 +184,59 @@ get_stored_private_key() {
     fi
 }
 
+# Safe file creation with permission handling
+create_file_safely() {
+    local filename="$1"
+    local content="$2"
+    local permissions="${3:-644}"
+    local directory=$(dirname "$filename")
+    
+    # Ensure directory exists with proper permissions
+    if [ ! -d "$directory" ]; then
+        status_info "Creating directory $directory"
+        if ! mkdir -p "$directory" 2>/dev/null; then
+            execute_command "sudo mkdir -p $directory" "Create directory with elevated privileges"
+            execute_command "sudo chown $USER:$USER $directory" "Set proper ownership"
+        fi
+    fi
+    
+    # Check directory writability
+    if [ ! -w "$directory" ]; then
+        status_warning "Directory $directory is not writable, fixing permissions"
+        execute_command "sudo chown $USER:$USER $directory" "Fix directory ownership"
+        execute_command "sudo chmod u+w $directory" "Fix directory permissions"
+    fi
+    
+    # Create file
+    if [ -z "$content" ]; then
+        # Just create an empty file
+        if ! touch "$filename" 2>/dev/null; then
+            execute_command "sudo touch $filename" "Create file with elevated privileges"
+            execute_command "sudo chown $USER:$USER $filename" "Set proper file ownership"
+        fi
+    else
+        # Create with content
+        if ! echo "$content" > "$filename" 2>/dev/null; then
+            # Try with sudo
+            echo "$content" | sudo tee "$filename" > /dev/null
+            execute_command "sudo chown $USER:$USER $filename" "Set proper file ownership"
+        fi
+    fi
+    
+    # Set permissions
+    if ! chmod "$permissions" "$filename" 2>/dev/null; then
+        execute_command "sudo chmod $permissions $filename" "Set proper file permissions"
+    fi
+    
+    # Verify file exists and is readable
+    if [ ! -r "$filename" ]; then
+        status_error "Failed to create or access file $filename"
+        return 1
+    fi
+    
+    return 0
+}
+
 # Main installation function
 install_ritual_node() {
     display_header
@@ -191,11 +244,32 @@ install_ritual_node() {
     # Check for prerequisites
     section "SYSTEM VALIDATION"
     
-    # Check internet connectivity with multiple fallbacks
+    # Check internet connectivity with multiple domains and methods
     status_info "Checking internet connectivity"
-    if ping -c 1 google.com > /dev/null 2>&1 || ping -c 1 cloudflare.com > /dev/null 2>&1 || ping -c 1 github.com > /dev/null 2>&1 || curl -s --connect-timeout 5 https://api.github.com > /dev/null 2>&1; then
-        status_success "Internet connection is available"
-    else
+    connectivity_check=false
+    
+    # Try multiple domains with ping
+    for domain in google.com cloudflare.com github.com amazon.com microsoft.com; do
+        if ping -c 1 -W 2 $domain > /dev/null 2>&1; then
+            status_success "Internet connection verified via ping to $domain"
+            connectivity_check=true
+            break
+        fi
+    done
+    
+    # Try HTTP/HTTPS connections if ping failed
+    if [ "$connectivity_check" = false ]; then
+        for url in https://api.github.com https://www.cloudflare.com https://www.google.com; do
+            if curl -s --connect-timeout 3 --max-time 5 $url > /dev/null 2>&1; then
+                status_success "Internet connection verified via HTTPS to $url"
+                connectivity_check=true
+                break
+            fi
+        done
+    fi
+    
+    # If all checks failed, offer manual override
+    if [ "$connectivity_check" = false ]; then
         status_warning "Internet connectivity check failed"
         echo -e "${YELLOW}Would you like to continue anyway? This is not recommended unless you're sure you have internet access. (y/n)${NC}"
         read -r continue_anyway
@@ -275,31 +349,56 @@ install_ritual_node() {
     
     section "NODE SETUP"
     
+    # Change repository path to use current user's home directory reliably
+    REPO_PATH="$HOME/ritual-node-app"
+    
     status_info "Setting up repository structure"
     # Check if directory exists and handle appropriately
-    REPO_PATH=~/infernet-container-starter
     if [ -d "$REPO_PATH" ]; then
         status_warning "Directory $REPO_PATH already exists"
-        echo -e "${YELLOW}Do you want to remove the existing directory and clone a fresh copy? (y/n)${NC}"
+        echo -e "${YELLOW}Do you want to remove the existing directory and create a fresh copy? (y/n)${NC}"
         read -r remove_dir
         if [[ "$remove_dir" =~ ^[Yy]$ ]]; then
-            execute_command "rm -rf $REPO_PATH" "Remove existing directory"
-            execute_command "git clone https://github.com/ritual-net/infernet-container-starter $REPO_PATH" "Repository clone"
+            # Use sudo to ensure we can remove any files regardless of permissions
+            execute_command "sudo rm -rf $REPO_PATH" "Remove existing directory"
+            execute_command "mkdir -p $REPO_PATH" "Create fresh directory"
+            execute_command "sudo chown -R $USER:$USER $REPO_PATH" "Set proper ownership"
         else
             status_info "Using existing directory structure"
+            # Still ensure user has proper ownership
+            execute_command "sudo chown -R $USER:$USER $REPO_PATH" "Set proper ownership"
         fi
     else
-        execute_command "git clone https://github.com/ritual-net/infernet-container-starter $REPO_PATH" "Repository clone"
+        execute_command "mkdir -p $REPO_PATH" "Create directory"
     fi
-    
-    # Ensure all required directories exist
+
+    # Create directory structure with proper ownership verification
+    status_info "Creating directory structure"
     execute_command "mkdir -p $REPO_PATH/deploy" "Create deploy directory"
     execute_command "mkdir -p $REPO_PATH/projects/hello-world/container" "Create container directory"
     execute_command "mkdir -p $REPO_PATH/projects/hello-world/contracts/script" "Create contracts script directory"
     execute_command "mkdir -p $REPO_PATH/projects/hello-world/contracts/src" "Create contracts src directory"
+    execute_command "sudo chown -R $USER:$USER $REPO_PATH" "Ensure proper ownership"
     
     # Change to the repository directory
     execute_command "cd $REPO_PATH" "Change directory"
+    
+    # Test if we can write to the directory before proceeding
+    TEST_FILE="$REPO_PATH/.write_test"
+    if ! touch "$TEST_FILE" 2>/dev/null; then
+        status_error "Cannot write to $REPO_PATH directory. Permission issues detected."
+        echo -e "${YELLOW}Would you like to fix permissions and continue? (y/n)${NC}"
+        read -r fix_perms
+        if [[ "$fix_perms" =~ ^[Yy]$ ]]; then
+            execute_command "sudo chown -R $USER:$USER $REPO_PATH" "Fix directory permissions"
+            execute_command "sudo chmod -R u+rw $REPO_PATH" "Grant user read-write access"
+        else
+            echo -e "${RED}Installation aborted due to permission issues.${NC}"
+            exit 1
+        fi
+    else
+        rm -f "$TEST_FILE"
+    fi
     
     status_info "Setting up configuration files"
     
@@ -310,10 +409,11 @@ install_ritual_node() {
     CONFIG_DIR="$REPO_PATH/deploy"
     CONFIG_FILE="$CONFIG_DIR/config.json"
     
-    execute_command "touch $CONFIG_FILE" "Create config file"
+    # Ensure the directory exists
+    execute_command "mkdir -p $CONFIG_DIR" "Ensure config directory exists"
     
-    cat > "$CONFIG_FILE" << EOL
-{
+    # Use safer file creation method
+    CONFIG_CONTENT='{
     "log_path": "infernet_node.log",
     "server": {
         "port": 4000,
@@ -329,7 +429,7 @@ install_ritual_node() {
         "registry_address": "0x3B1554f346DFe5c482Bb4BA31b880c1C18412170",
         "wallet": {
           "max_gas_limit": 4000000,
-          "private_key": "${PRIVATE_KEY}",
+          "private_key": "'${PRIVATE_KEY}'",
           "allowed_sim_errors": []
         },
         "snapshot_sync": {
@@ -361,24 +461,35 @@ install_ritual_node() {
             "generates_proofs": false
         }
     ]
-}
-EOL
-    status_success "Created deploy/config.json"
+}'
     
-    # Set secure permissions on config files
-    execute_command "chmod 600 $CONFIG_FILE" "Set secure config permissions"
+    if create_file_safely "$CONFIG_FILE" "$CONFIG_CONTENT" "600"; then
+        status_success "Created deploy/config.json with secure permissions"
+    else
+        status_error "Failed to create config file"
+        echo -e "${RED}This is critical. Would you like to abort the installation? (y/n)${NC}"
+        read -r abort_choice
+        if [[ "$abort_choice" =~ ^[Yy]$ ]]; then
+            echo -e "${RED}Installation aborted.${NC}"
+            exit 1
+        fi
+    fi
     
-    # Copy the same content to the container config
-    CONTAINER_CONFIG="$REPO_PATH/projects/hello-world/container/config.json"
-    execute_command "cp $CONFIG_FILE $CONTAINER_CONFIG" "Container config"
-    execute_command "chmod 600 $CONTAINER_CONFIG" "Set secure container config permissions"
+    # Copy the config to the container directory
+    CONTAINER_DIR="$REPO_PATH/projects/hello-world/container"
+    CONTAINER_CONFIG="$CONTAINER_DIR/config.json"
+    
+    execute_command "mkdir -p $CONTAINER_DIR" "Ensure container directory exists"
+    
+    if create_file_safely "$CONTAINER_CONFIG" "$CONFIG_CONTENT" "600"; then
+        status_success "Created container config file with secure permissions"
+    else
+        status_warning "Failed to create container config file, continuing anyway"
+    fi
     
     # Update the Deploy.s.sol
     DEPLOY_FILE="$REPO_PATH/projects/hello-world/contracts/script/Deploy.s.sol"
-    execute_command "touch $DEPLOY_FILE" "Create Deploy.s.sol file"
-
-    cat > "$DEPLOY_FILE" << EOL
-// SPDX-License-Identifier: BSD-3-Clause-Clear
+    DEPLOY_CONTENT='// SPDX-License-Identifier: BSD-3-Clause-Clear
 pragma solidity ^0.8.13;
 
 import {Script, console2} from "forge-std/Script.sol";
@@ -403,16 +514,17 @@ contract Deploy is Script {
         vm.stopBroadcast();
         vm.broadcast();
     }
-}
-EOL
-    status_success "Updated Deploy.s.sol"
+}'
 
-    # Create SaysGM.sol file in src directory
-    SRC_FILE="$REPO_PATH/projects/hello-world/contracts/src/SaysGM.sol"
-    execute_command "touch $SRC_FILE" "Create SaysGM.sol file"
+if create_file_safely "$DEPLOY_FILE" "$DEPLOY_CONTENT"; then
+    status_success "Created Deploy.s.sol file"
+else
+    status_warning "Failed to create Deploy.s.sol file"
+fi
 
-    cat > "$SRC_FILE" << EOL
-// SPDX-License-Identifier: BSD-3-Clause-Clear
+# Create SaysGM.sol file in src directory
+SRC_FILE="$REPO_PATH/projects/hello-world/contracts/src/SaysGM.sol"
+SRC_CONTENT='// SPDX-License-Identifier: BSD-3-Clause-Clear
 pragma solidity ^0.8.13;
 
 import {Infernet} from "infernet-sdk/Infernet.sol";
@@ -435,16 +547,17 @@ contract SaysGM is InfernetConsumer {
         emit GMReceived(response);
         return response;
     }
-}
-EOL
-    status_success "Created SaysGM.sol"
+}'
 
-    # Create CallContract.s.sol file
-    CALL_FILE="$REPO_PATH/projects/hello-world/contracts/script/CallContract.s.sol"
-    execute_command "touch $CALL_FILE" "Create CallContract.s.sol file"
+if create_file_safely "$SRC_FILE" "$SRC_CONTENT"; then
+    status_success "Created SaysGM.sol file"
+else
+    status_warning "Failed to create SaysGM.sol file"
+fi
 
-    cat > "$CALL_FILE" << EOL
-// SPDX-License-Identifier: BSD-3-Clause-Clear
+# Create CallContract.s.sol file
+CALL_FILE="$REPO_PATH/projects/hello-world/contracts/script/CallContract.s.sol"
+CALL_CONTENT='// SPDX-License-Identifier: BSD-3-Clause-Clear
 pragma solidity ^0.8.13;
 
 import {Script, console2} from "forge-std/Script.sol";
@@ -469,39 +582,41 @@ contract CallContract is Script {
 
         vm.stopBroadcast();
     }
-}
-EOL
-    status_success "Created CallContract.s.sol"
+}'
 
-    # Update the Makefile
-    MAKEFILE="$REPO_PATH/projects/hello-world/contracts/Makefile"
-    execute_command "touch $MAKEFILE" "Create Makefile"
+if create_file_safely "$CALL_FILE" "$CALL_CONTENT"; then
+    status_success "Created CallContract.s.sol file"
+else
+    status_warning "Failed to create CallContract.s.sol file"
+fi
 
-    cat > "$MAKEFILE" << EOL
-# phony targets are targets that don't actually create a file
+# Update the Makefile
+MAKEFILE="$REPO_PATH/projects/hello-world/contracts/Makefile"
+MAKEFILE_CONTENT='# phony targets are targets that don'\''t actually create a file
 .phony: deploy
 
 # Get private key from secure storage
 include ~/.ritual_node_env
-PRIVATE_KEY := \$(shell bash -c 'if [ -f ~/.ritual-secure/key.enc ] && [ -f ~/.ritual-secure/salt ]; then SALT=\$\$(cat ~/.ritual-secure/salt); ENCRYPTED_KEY=\$\$(cat ~/.ritual-secure/key.enc); echo "\$\${ENCRYPTED_KEY}" | openssl enc -aes-256-cbc -d -a -salt -pass pass:"\$\${SALT}" 2>/dev/null; else echo "PRIVATE_KEY_NOT_FOUND"; fi')
+PRIVATE_KEY := $(shell bash -c '\''if [ -f ~/.ritual-secure/key.enc ] && [ -f ~/.ritual-secure/salt ]; then SALT=$$(cat ~/.ritual-secure/salt); ENCRYPTED_KEY=$$(cat ~/.ritual-secure/key.enc); echo "$${ENCRYPTED_KEY}" | openssl enc -aes-256-cbc -d -a -salt -pass pass:"$${SALT}" 2>/dev/null; else echo "PRIVATE_KEY_NOT_FOUND"; fi'\'')
 RPC_URL := https://mainnet.base.org/
 
 # deploying the contract
 deploy:
-	@PRIVATE_KEY=\$(PRIVATE_KEY) forge script script/Deploy.s.sol:Deploy --broadcast --rpc-url \$(RPC_URL)
+	@PRIVATE_KEY=$(PRIVATE_KEY) forge script script/Deploy.s.sol:Deploy --broadcast --rpc-url $(RPC_URL)
 
 # calling sayGM()
 call-contract:
-	@PRIVATE_KEY=\$(PRIVATE_KEY) forge script script/CallContract.s.sol:CallContract --broadcast --rpc-url \$(RPC_URL)
-EOL
-    status_success "Updated Makefile with secure key handling"
+	@PRIVATE_KEY=$(PRIVATE_KEY) forge script script/CallContract.s.sol:CallContract --broadcast --rpc-url $(RPC_URL)'
 
-    # Create docker-compose.yaml
-    DOCKER_COMPOSE="$REPO_PATH/deploy/docker-compose.yaml"
-    execute_command "touch $DOCKER_COMPOSE" "Create docker-compose.yaml"
+if create_file_safely "$MAKEFILE" "$MAKEFILE_CONTENT"; then
+    status_success "Created Makefile with secure key handling"
+else
+    status_warning "Failed to create Makefile"
+fi
 
-    cat > "$DOCKER_COMPOSE" << EOL
-version: "3.8"
+# Create docker-compose.yaml
+DOCKER_COMPOSE="$REPO_PATH/deploy/docker-compose.yaml"
+DOCKER_COMPOSE_CONTENT='version: "3.8"
 
 services:
   node:
@@ -533,16 +648,17 @@ services:
 
 networks:
   infernet:
-    driver: bridge
-EOL
+    driver: bridge'
+
+if create_file_safely "$DOCKER_COMPOSE" "$DOCKER_COMPOSE_CONTENT"; then
     status_success "Created docker-compose.yaml"
+else
+    status_warning "Failed to create docker-compose.yaml"
+fi
 
-    # Create root Makefile
-    ROOT_MAKEFILE="$REPO_PATH/Makefile"
-    execute_command "touch $ROOT_MAKEFILE" "Create root Makefile"
-
-    cat > "$ROOT_MAKEFILE" << EOL
-# Default project
+# Create root Makefile
+ROOT_MAKEFILE="$REPO_PATH/Makefile"
+ROOT_MAKEFILE_CONTENT='# Default project
 project ?= hello-world
 
 # Deploy container
@@ -555,129 +671,237 @@ stop-container:
 
 # Deploy contracts
 deploy-contracts:
-	@cd projects/\$(project)/contracts && make deploy
+	@cd projects/$(project)/contracts && make deploy
 
 # Call contract
 call-contract:
-	@cd projects/\$(project)/contracts && make call-contract
-EOL
+	@cd projects/$(project)/contracts && make call-contract'
+
+if create_file_safely "$ROOT_MAKEFILE" "$ROOT_MAKEFILE_CONTENT"; then
     status_success "Created root Makefile"
+else
+    status_warning "Failed to create root Makefile"
+fi
 
-    # Store installation path in environment file for consistency
-    execute_command "echo 'RITUAL_NODE_PATH=$REPO_PATH' > ~/.ritual_node_env" "Save installation path"
-    execute_command "chmod +x ~/.ritual_node_env" "Make environment file executable"
+# Store installation path in environment file for consistency
+ENV_FILE="$HOME/.ritual_node_env"
+ENV_CONTENT="RITUAL_NODE_PATH=$REPO_PATH"
 
-    section "FOUNDRY INSTALLATION"
+if create_file_safely "$ENV_FILE" "$ENV_CONTENT" "755"; then
+    status_success "Saved installation path to environment file"
+else
+    status_warning "Failed to create environment file"
+fi
 
-    status_info "Installing Foundry"
-    execute_command "mkdir -p ~/foundry" "Create Foundry directory"
-    execute_command "curl -L https://foundry.paradigm.xyz | bash" "Download Foundry" "show_output"
+section "FOUNDRY INSTALLATION"
 
-    # Ensure foundryup is loaded correctly
-    status_info "Loading Foundry environment"
-    execute_command "export PATH=\"$PATH:$HOME/.foundry/bin\"" "Add Foundry to PATH"
-    execute_command "source ~/.bashrc" "Reload shell"
+status_info "Installing Foundry"
+execute_command "mkdir -p ~/foundry" "Create Foundry directory"
+execute_command "curl -L https://foundry.paradigm.xyz | bash" "Download Foundry" "show_output"
 
-    # Try different approach for foundryup
-    if ! command -v foundryup &> /dev/null; then
-        status_warning "foundryup not found in PATH, using direct path"
-        execute_command "$HOME/.foundry/bin/foundryup" "Install Foundry" "show_output"
+# Ensure foundryup is loaded correctly
+status_info "Loading Foundry environment"
+execute_command "export PATH=\"$PATH:$HOME/.foundry/bin\"" "Add Foundry to PATH"
+execute_command "source ~/.bashrc" "Reload shell"
+
+# Try different approach for foundryup
+if ! command -v foundryup &> /dev/null; then
+    status_warning "foundryup not found in PATH, using direct path"
+    execute_command "$HOME/.foundry/bin/foundryup" "Install Foundry" "show_output"
+else
+    execute_command "foundryup" "Install Foundry" "show_output"
+fi
+
+section "INSTALLING DEPENDENCIES"
+
+status_info "Installing required libraries"
+# Add PATH to ensure forge is available
+execute_command "export PATH=\"$PATH:$HOME/.foundry/bin\"" "Add Foundry to PATH again"
+
+# Check if forge is available, if not use direct path
+if ! command -v forge &> /dev/null; then
+    FORGE_CMD="$HOME/.foundry/bin/forge"
+    status_warning "forge not found in PATH, using direct path: $FORGE_CMD"
+else
+    FORGE_CMD="forge"
+fi
+
+execute_command "cd $REPO_PATH/projects/hello-world/contracts && $FORGE_CMD install --no-commit foundry-rs/forge-std" "Install forge-std" "show_output"
+execute_command "cd $REPO_PATH/projects/hello-world/contracts && $FORGE_CMD install --no-commit ritual-net/infernet-sdk" "Install infernet-sdk" "show_output"
+
+section "DEPLOYING NODE"
+
+status_info "Starting Docker containers"
+# More robust approach to Docker Compose startup
+if [ -f "$DOCKER_COMPOSE" ]; then
+    # First, try with the user's permissions
+    if ! (cd "$REPO_PATH" && docker compose -f deploy/docker-compose.yaml up -d); then
+        status_warning "Failed to start Docker containers with current permissions"
+        echo -e "${YELLOW}Trying with sudo privileges...${NC}"
+        execute_command "cd $REPO_PATH && sudo docker compose -f deploy/docker-compose.yaml up -d" "Deploy container with elevated privileges" "show_output"
     else
-        execute_command "foundryup" "Install Foundry" "show_output"
+        status_success "Docker containers started successfully"
     fi
-
-    section "INSTALLING DEPENDENCIES"
-    
-    status_info "Installing required libraries"
-    # Add PATH to ensure forge is available
-    execute_command "export PATH=\"$PATH:$HOME/.foundry/bin\"" "Add Foundry to PATH again"
-
-    # Check if forge is available, if not use direct path
-    if ! command -v forge &> /dev/null; then
-        FORGE_CMD="$HOME/.foundry/bin/forge"
-        status_warning "forge not found in PATH, using direct path: $FORGE_CMD"
-    else
-        FORGE_CMD="forge"
+else
+    status_error "Docker compose file not found at $DOCKER_COMPOSE"
+    echo -e "${YELLOW}Would you like to create it and try again? (y/n)${NC}"
+    read -r create_compose
+    if [[ "$create_compose" =~ ^[Yy]$ ]]; then
+        if create_file_safely "$DOCKER_COMPOSE" "$DOCKER_COMPOSE_CONTENT"; then
+            status_success "Created docker-compose.yaml, trying deployment again"
+            execute_command "cd $REPO_PATH && docker compose -f deploy/docker-compose.yaml up -d" "Deploy container" "show_output"
+        else
+            status_error "Failed to create docker-compose.yaml"
+        fi
     fi
+fi
 
-    execute_command "cd $REPO_PATH/projects/hello-world/contracts && $FORGE_CMD install --no-commit foundry-rs/forge-std" "Install forge-std" "show_output"
-    execute_command "cd $REPO_PATH/projects/hello-world/contracts && $FORGE_CMD install --no-commit ritual-net/infernet-sdk" "Install infernet-sdk" "show_output"
-    
-    section "DEPLOYING NODE"
-    
-    status_info "Starting Docker containers"
-    execute_command "cd $REPO_PATH && docker compose -f deploy/docker-compose.yaml up -d" "Deploy container" "show_output"
-    
-    status_info "Waiting for node to initialize"
-    progress_bar 5
-    
-    section "DEPLOYING CONSUMER CONTRACT"
-    
-    status_info "Deploying contract"
-    # Use direct paths to ensure the commands work
-    execute_command "export PATH=\"$PATH:$HOME/.foundry/bin\"" "Ensure Foundry in PATH"
+status_info "Waiting for node to initialize"
+progress_bar 5
 
-    # Create a temporary script to run the deployment and capture output
-    TEMP_SCRIPT="/tmp/deploy_contract.sh"
-    cat > "$TEMP_SCRIPT" << 'EOF'
-#!/bin/bash
-cd $1 && \
-PRIVATE_KEY=$(bash -c 'if [ -f ~/.ritual-secure/key.enc ] && [ -f ~/.ritual-secure/salt ]; then SALT=$(cat ~/.ritual-secure/salt); ENCRYPTED_KEY=$(cat ~/.ritual-secure/key.enc); echo "${ENCRYPTED_KEY}" | openssl enc -aes-256-cbc -d -a -salt -pass pass:"${SALT}" 2>/dev/null; else echo "PRIVATE_KEY_NOT_FOUND"; fi') && \
-$2 script script/Deploy.s.sol:Deploy --broadcast --rpc-url https://mainnet.base.org/
-EOF
-    chmod +x "$TEMP_SCRIPT"
+section "DEPLOYING CONSUMER CONTRACT"
 
-    # Run the script to capture output
-    CONTRACT_RESULT=$(bash "$TEMP_SCRIPT" "$REPO_PATH/projects/hello-world/contracts" "$FORGE_CMD" 2>&1)
+status_info "Deploying contract"
+# Use direct paths to ensure the commands work
+execute_command "export PATH=\"$PATH:$HOME/.foundry/bin\"" "Ensure Foundry in PATH"
+
+# Create a more robust deployment script
+TEMP_SCRIPT="/tmp/deploy_contract.sh"
+SCRIPT_CONTENT='#!/bin/bash
+cd "$1" || { echo "Failed to change to directory $1"; exit 1; }
+
+# Set PATH to include foundry
+export PATH="$PATH:$HOME/.foundry/bin"
+
+# Check for forge
+if ! command -v forge &> /dev/null && [ -f "$HOME/.foundry/bin/forge" ]; then
+    FORGE_CMD="$HOME/.foundry/bin/forge"
+    echo "Using forge at $FORGE_CMD"
+else
+    FORGE_CMD="forge"
+fi
+
+# Get private key
+if [ -f ~/.ritual-secure/key.enc ] && [ -f ~/.ritual-secure/salt ]; then
+    SALT=$(cat ~/.ritual-secure/salt)
+    ENCRYPTED_KEY=$(cat ~/.ritual-secure/key.enc)
+    PRIVATE_KEY=$(echo "${ENCRYPTED_KEY}" | openssl enc -aes-256-cbc -d -a -salt -pass pass:"${SALT}" 2>/dev/null)
+    if [ -z "$PRIVATE_KEY" ]; then
+        echo "Failed to decrypt private key"
+        exit 1
+    fi
+else
+    echo "Private key files not found"
+    exit 1
+fi
+
+# Run deployment
+echo "Deploying contract..."
+PRIVATE_KEY=$PRIVATE_KEY $FORGE_CMD script script/Deploy.s.sol:Deploy --broadcast --rpc-url https://mainnet.base.org/
+'
+
+# Create the deployment script with execute permissions
+if create_file_safely "$TEMP_SCRIPT" "$SCRIPT_CONTENT" "700"; then
+    status_success "Created deployment script"
+    
+    # Run the script and capture output
+    CONTRACT_RESULT=$(bash "$TEMP_SCRIPT" "$REPO_PATH/projects/hello-world/contracts" 2>&1)
     echo "$CONTRACT_RESULT"
 
-    # Extract contract address
-    CONTRACT_ADDRESS=$(echo "$CONTRACT_RESULT" | grep -oP 'Deployed SaysHello: \K0x[a-fA-F0-9]+')
+    # Extract contract address with improved regex that handles multiple formats
+    CONTRACT_ADDRESS=$(echo "$CONTRACT_RESULT" | grep -oP '(?:Deployed SaysHello|Deployed at): \K0x[a-fA-F0-9]+' | head -1)
 
     if [ -n "$CONTRACT_ADDRESS" ]; then
         status_success "Contract deployed at: ${BRIGHT_GREEN}$CONTRACT_ADDRESS${NC}"
         
         # Update CallContract.s.sol with the new contract address
-        sed -i "s/SaysGM saysGm = SaysGM(.*);/SaysGM saysGm = SaysGM($CONTRACT_ADDRESS);/" "$REPO_PATH/projects/hello-world/contracts/script/CallContract.s.sol"
+        CALL_FILE_CONTENT=$(cat "$CALL_FILE" 2>/dev/null)
+        if [ -n "$CALL_FILE_CONTENT" ]; then
+            # Use sed to replace the address in the file content
+            UPDATED_CONTENT=$(echo "$CALL_FILE_CONTENT" | sed "s/SaysGM saysGm = SaysGM(0x[a-fA-F0-9]\{40\});/SaysGM saysGm = SaysGM($CONTRACT_ADDRESS);/")
+            # Write the updated content back to the file
+            if create_file_safely "$CALL_FILE" "$UPDATED_CONTENT"; then
+                status_success "Updated CallContract.s.sol with deployed contract address"
+            else
+                status_warning "Failed to update CallContract.s.sol"
+            fi
+        else
+            status_warning "Could not read CallContract.s.sol to update it"
+        fi
         
+        # Continue with testing
         section "TESTING NODE"
         
         status_info "Calling contract"
         # Create a temporary script to call the contract
         TEMP_CALL_SCRIPT="/tmp/call_contract.sh"
-        cat > "$TEMP_CALL_SCRIPT" << 'EOF'
-#!/bin/bash
-cd $1 && \
-PRIVATE_KEY=$(bash -c 'if [ -f ~/.ritual-secure/key.enc ] && [ -f ~/.ritual-secure/salt ]; then SALT=$(cat ~/.ritual-secure/salt); ENCRYPTED_KEY=$(cat ~/.ritual-secure/key.enc); echo "${ENCRYPTED_KEY}" | openssl enc -aes-256-cbc -d -a -salt -pass pass:"${SALT}" 2>/dev/null; else echo "PRIVATE_KEY_NOT_FOUND"; fi') && \
-$2 script script/CallContract.s.sol:CallContract --broadcast --rpc-url https://mainnet.base.org/
-EOF
-        chmod +x "$TEMP_CALL_SCRIPT"
-        
-        # Run the script
-        bash "$TEMP_CALL_SCRIPT" "$REPO_PATH/projects/hello-world/contracts" "$FORGE_CMD"
-        
-        section "COMPLETION"
-        
-        echo -e "\n${BOLD}${BG_GREEN}${WHITE} RITUAL NODE SETUP COMPLETE ${NC}\n"
-        echo -e "${BRIGHT_CYAN}Your node is now running!${NC}"
-        echo -e "\n${WHITE}Contract Address: ${BRIGHT_GREEN}$CONTRACT_ADDRESS${NC}"
-        echo -e "${WHITE}Node Interface: ${BRIGHT_GREEN}http://localhost:4000${NC}"
-        
-        echo -e "\n${BRIGHT_BLACK}Use the following commands to manage your node:${NC}"
-        echo -e "${BRIGHT_BLACK}• ${BRIGHT_WHITE}docker compose -f $REPO_PATH/deploy/docker-compose.yaml down${NC} - Stop the node"
-        echo -e "${BRIGHT_BLACK}• ${BRIGHT_WHITE}docker compose -f $REPO_PATH/deploy/docker-compose.yaml up${NC} - Start the node"
-        echo -e "${BRIGHT_BLACK}• ${BRIGHT_WHITE}docker compose -f $REPO_PATH/deploy/docker-compose.yaml logs -f${NC} - View logs"
+        CALL_SCRIPT_CONTENT='#!/bin/bash
+cd "$1" || { echo "Failed to change to directory $1"; exit 1; }
 
-        # Clean up temp files
-        rm -f "$TEMP_SCRIPT" "$TEMP_CALL_SCRIPT"
+# Set PATH to include foundry
+export PATH="$PATH:$HOME/.foundry/bin"
+
+# Check for forge
+if ! command -v forge &> /dev/null && [ -f "$HOME/.foundry/bin/forge" ]; then
+    FORGE_CMD="$HOME/.foundry/bin/forge"
+    echo "Using forge at $FORGE_CMD"
+else
+    FORGE_CMD="forge"
+fi
+
+# Get private key
+if [ -f ~/.ritual-secure/key.enc ] && [ -f ~/.ritual-secure/salt ]; then
+    SALT=$(cat ~/.ritual-secure/salt)
+    ENCRYPTED_KEY=$(cat ~/.ritual-secure/key.enc)
+    PRIVATE_KEY=$(echo "${ENCRYPTED_KEY}" | openssl enc -aes-256-cbc -d -a -salt -pass pass:"${SALT}" 2>/dev/null)
+    if [ -z "$PRIVATE_KEY" ]; then
+        echo "Failed to decrypt private key"
+        exit 1
+    fi
+else
+    echo "Private key files not found"
+    exit 1
+fi
+
+# Call contract
+echo "Calling contract..."
+PRIVATE_KEY=$PRIVATE_KEY $FORGE_CMD script script/CallContract.s.sol:CallContract --broadcast --rpc-url https://mainnet.base.org/
+'
+
+        # Create the call script with execute permissions
+        if create_file_safely "$TEMP_CALL_SCRIPT" "$CALL_SCRIPT_CONTENT" "700"; then
+            status_success "Created contract call script"
+            
+            # Run the script
+            bash "$TEMP_CALL_SCRIPT" "$REPO_PATH/projects/hello-world/contracts"
+            
+            section "COMPLETION"
+            
+            echo -e "\n${BOLD}${BG_GREEN}${WHITE} RITUAL NODE SETUP COMPLETE ${NC}\n"
+            echo -e "${BRIGHT_CYAN}Your node is now running!${NC}"
+            echo -e "\n${WHITE}Contract Address: ${BRIGHT_GREEN}$CONTRACT_ADDRESS${NC}"
+            echo -e "${WHITE}Node Interface: ${BRIGHT_GREEN}http://localhost:4000${NC}"
+            
+            echo -e "\n${BRIGHT_BLACK}Use the following commands to manage your node:${NC}"
+            echo -e "${BRIGHT_BLACK}• ${BRIGHT_WHITE}docker compose -f $REPO_PATH/deploy/docker-compose.yaml down${NC} - Stop the node"
+            echo -e "${BRIGHT_BLACK}• ${BRIGHT_WHITE}docker compose -f $REPO_PATH/deploy/docker-compose.yaml up${NC} - Start the node"
+            echo -e "${BRIGHT_BLACK}• ${BRIGHT_WHITE}docker compose -f $REPO_PATH/deploy/docker-compose.yaml logs -f${NC} - View logs"
+
+            # Clean up temp files
+            rm -f "$TEMP_SCRIPT" "$TEMP_CALL_SCRIPT"
+        else
+            status_error "Failed to create contract call script"
+        fi
     else
         status_error "Could not extract contract address. Deployment may have failed."
         status_warning "You may need to run the deployment manually using: cd $REPO_PATH && make deploy-contracts"
         
         # Clean up temp files
-        rm -f "$TEMP_SCRIPT" "$TEMP_CALL_SCRIPT"
+        rm -f "$TEMP_SCRIPT"
     fi
-}
+else
+    status_error "Failed to create deployment script"
+fi
 
 # Function to validate docker installation
 validate_docker() {
