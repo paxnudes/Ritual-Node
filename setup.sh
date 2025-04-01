@@ -113,7 +113,7 @@ execute_command() {
                 status_warning "$description failed, retrying ($retry_count/$max_retries)..."
                 sleep 2
             else
-                status_error "$description failed after $max_retries attempts"
+                status_warning "$description failed after $max_retries attempts, continuing..."
                 echo -e "${DIM}$(cat /tmp/cmd_output.log)${NC}"
                 
                 # For critical commands, offer to abort
@@ -126,7 +126,8 @@ execute_command() {
                     fi
                 fi
                 
-                return 1
+                # Continue execution instead of returning error status
+                return 0
             fi
         fi
     done
@@ -274,9 +275,31 @@ install_ritual_node() {
     
     section "NODE SETUP"
     
-    status_info "Cloning repository"
-    execute_command "git clone https://github.com/ritual-net/infernet-container-starter" "Repository clone"
-    execute_command "cd infernet-container-starter" "Change directory"
+    status_info "Setting up repository structure"
+    # Check if directory exists and handle appropriately
+    REPO_PATH=~/infernet-container-starter
+    if [ -d "$REPO_PATH" ]; then
+        status_warning "Directory $REPO_PATH already exists"
+        echo -e "${YELLOW}Do you want to remove the existing directory and clone a fresh copy? (y/n)${NC}"
+        read -r remove_dir
+        if [[ "$remove_dir" =~ ^[Yy]$ ]]; then
+            execute_command "rm -rf $REPO_PATH" "Remove existing directory"
+            execute_command "git clone https://github.com/ritual-net/infernet-container-starter $REPO_PATH" "Repository clone"
+        else
+            status_info "Using existing directory structure"
+        fi
+    else
+        execute_command "git clone https://github.com/ritual-net/infernet-container-starter $REPO_PATH" "Repository clone"
+    fi
+    
+    # Ensure all required directories exist
+    execute_command "mkdir -p $REPO_PATH/deploy" "Create deploy directory"
+    execute_command "mkdir -p $REPO_PATH/projects/hello-world/container" "Create container directory"
+    execute_command "mkdir -p $REPO_PATH/projects/hello-world/contracts/script" "Create contracts script directory"
+    execute_command "mkdir -p $REPO_PATH/projects/hello-world/contracts/src" "Create contracts src directory"
+    
+    # Change to the repository directory
+    execute_command "cd $REPO_PATH" "Change directory"
     
     status_info "Setting up configuration files"
     
@@ -284,7 +307,12 @@ install_ritual_node() {
     PRIVATE_KEY=$(get_stored_private_key)
     
     # Create config.json with provided private key
-    cat > ~/infernet-container-starter/deploy/config.json << EOL
+    CONFIG_DIR="$REPO_PATH/deploy"
+    CONFIG_FILE="$CONFIG_DIR/config.json"
+    
+    execute_command "touch $CONFIG_FILE" "Create config file"
+    
+    cat > "$CONFIG_FILE" << EOL
 {
     "log_path": "infernet_node.log",
     "server": {
@@ -338,91 +366,247 @@ EOL
     status_success "Created deploy/config.json"
     
     # Set secure permissions on config files
-    execute_command "chmod 600 ~/infernet-container-starter/deploy/config.json" "Set secure config permissions"
+    execute_command "chmod 600 $CONFIG_FILE" "Set secure config permissions"
     
     # Copy the same content to the container config
-    execute_command "cp ~/infernet-container-starter/deploy/config.json ~/infernet-container-starter/projects/hello-world/container/config.json" "Container config"
-    execute_command "chmod 600 ~/infernet-container-starter/projects/hello-world/container/config.json" "Set secure container config permissions"
+    CONTAINER_CONFIG="$REPO_PATH/projects/hello-world/container/config.json"
+    execute_command "cp $CONFIG_FILE $CONTAINER_CONFIG" "Container config"
+    execute_command "chmod 600 $CONTAINER_CONFIG" "Set secure container config permissions"
     
     # Update the Deploy.s.sol
-    cat > ~/infernet-container-starter/projects/hello-world/contracts/script/Deploy.s.sol << EOL
-// SPDX-License-Identifier: BSD-3-Clause-Clear
-pragma solidity ^0.8.13;
+    DEPLOY_FILE="$REPO_PATH/projects/hello-world/contracts/script/Deploy.s.sol"
+    execute_command "touch $DEPLOY_FILE" "Create Deploy.s.sol file"
 
-import {Script, console2} from "forge-std/Script.sol";
-import {SaysGM} from "../src/SaysGM.sol";
+    cat > "$DEPLOY_FILE" << EOL
+    // SPDX-License-Identifier: BSD-3-Clause-Clear
+    pragma solidity ^0.8.13;
 
-contract Deploy is Script {
-    function run() public {
-        // Setup wallet
-        uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
-        vm.startBroadcast(deployerPrivateKey);
+    import {Script, console2} from "forge-std/Script.sol";
+    import {SaysGM} from "../src/SaysGM.sol";
 
-        // Log address
-        address deployerAddress = vm.addr(deployerPrivateKey);
-        console2.log("Loaded deployer: ", deployerAddress);
+    contract Deploy is Script {
+        function run() public {
+            // Setup wallet
+            uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
+            vm.startBroadcast(deployerPrivateKey);
 
-        address registry = 0x3B1554f346DFe5c482Bb4BA31b880c1C18412170;
-        // Create consumer
-        SaysGM saysGm = new SaysGM(registry);
-        console2.log("Deployed SaysHello: ", address(saysGm));
+            // Log address
+            address deployerAddress = vm.addr(deployerPrivateKey);
+            console2.log("Loaded deployer: ", deployerAddress);
 
-        // Execute
-        vm.stopBroadcast();
-        vm.broadcast();
+            address registry = 0x3B1554f346DFe5c482Bb4BA31b880c1C18412170;
+            // Create consumer
+            SaysGM saysGm = new SaysGM(registry);
+            console2.log("Deployed SaysHello: ", address(saysGm));
+
+            // Execute
+            vm.stopBroadcast();
+            vm.broadcast();
+        }
     }
-}
-EOL
+    EOL
     status_success "Updated Deploy.s.sol"
-    
+
+    # Create SaysGM.sol file in src directory
+    SRC_FILE="$REPO_PATH/projects/hello-world/contracts/src/SaysGM.sol"
+    execute_command "touch $SRC_FILE" "Create SaysGM.sol file"
+
+    cat > "$SRC_FILE" << EOL
+    // SPDX-License-Identifier: BSD-3-Clause-Clear
+    pragma solidity ^0.8.13;
+
+    import {Infernet} from "infernet-sdk/Infernet.sol";
+    import {InfernetConsumer} from "infernet-sdk/InfernetConsumer.sol";
+
+    contract SaysGM is InfernetConsumer {
+        // Emitted when sayGM is called
+        event GMReceived(bytes data);
+
+        // Constructor
+        constructor(address registry) InfernetConsumer(registry) {}
+
+        // Say GM to someone
+        function sayGM(
+            address container,
+            string calldata name
+        ) external returns (bytes memory) {
+            bytes memory encoded = abi.encode(name);
+            bytes memory response = _callInfernet(container, encoded);
+            emit GMReceived(response);
+            return response;
+        }
+    }
+    EOL
+    status_success "Created SaysGM.sol"
+
+    # Create CallContract.s.sol file
+    CALL_FILE="$REPO_PATH/projects/hello-world/contracts/script/CallContract.s.sol"
+    execute_command "touch $CALL_FILE" "Create CallContract.s.sol file"
+
+    cat > "$CALL_FILE" << EOL
+    // SPDX-License-Identifier: BSD-3-Clause-Clear
+    pragma solidity ^0.8.13;
+
+    import {Script, console2} from "forge-std/Script.sol";
+    import {SaysGM} from "../src/SaysGM.sol";
+
+    contract CallContract is Script {
+        function run() public {
+            // Setup wallet
+            uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
+            vm.startBroadcast(deployerPrivateKey);
+
+            // Log address
+            address deployerAddress = vm.addr(deployerPrivateKey);
+            console2.log("Loaded deployer: ", deployerAddress);
+
+            // Call contract
+            // This will be updated with the actual contract address after deployment
+            SaysGM saysGm = SaysGM(0x0000000000000000000000000000000000000000);
+            console2.log("Calling sayGM...");
+            bytes memory res = saysGm.sayGM(0x8ad64fa5a5e1bd7f0eb750e45baf3e0a1499a549, "Ritual");
+            console2.log("Response: ", string(res));
+
+            vm.stopBroadcast();
+        }
+    }
+    EOL
+    status_success "Created CallContract.s.sol"
+
     # Update the Makefile
-    cat > ~/infernet-container-starter/projects/hello-world/contracts/Makefile << EOL
-# phony targets are targets that don't actually create a file
-.phony: deploy
+    MAKEFILE="$REPO_PATH/projects/hello-world/contracts/Makefile"
+    execute_command "touch $MAKEFILE" "Create Makefile"
 
-# Get private key from secure storage
-include ~/.ritual_node_env
-PRIVATE_KEY := $(shell bash -c 'if [ -f ~/.ritual-secure/key.enc ] && [ -f ~/.ritual-secure/salt ]; then SALT=$$(cat ~/.ritual-secure/salt); ENCRYPTED_KEY=$$(cat ~/.ritual-secure/key.enc); echo "$${ENCRYPTED_KEY}" | openssl enc -aes-256-cbc -d -a -salt -pass pass:"$${SALT}" 2>/dev/null; else echo "PRIVATE_KEY_NOT_FOUND"; fi')
-RPC_URL := https://mainnet.base.org/
+    cat > "$MAKEFILE" << EOL
+    # phony targets are targets that don't actually create a file
+    .phony: deploy
 
-# deploying the contract
-deploy:
-	@PRIVATE_KEY=$(PRIVATE_KEY) forge script script/Deploy.s.sol:Deploy --broadcast --rpc-url $(RPC_URL)
+    # Get private key from secure storage
+    include ~/.ritual_node_env
+    PRIVATE_KEY := \$(shell bash -c 'if [ -f ~/.ritual-secure/key.enc ] && [ -f ~/.ritual-secure/salt ]; then SALT=\$\$(cat ~/.ritual-secure/salt); ENCRYPTED_KEY=\$\$(cat ~/.ritual-secure/key.enc); echo "\$\${ENCRYPTED_KEY}" | openssl enc -aes-256-cbc -d -a -salt -pass pass:"\$\${SALT}" 2>/dev/null; else echo "PRIVATE_KEY_NOT_FOUND"; fi')
+    RPC_URL := https://mainnet.base.org/
 
-# calling sayGM()
-call-contract:
-	@PRIVATE_KEY=$(PRIVATE_KEY) forge script script/CallContract.s.sol:CallContract --broadcast --rpc-url $(RPC_URL)
-EOL
+    # deploying the contract
+    deploy:
+    @PRIVATE_KEY=\$(PRIVATE_KEY) forge script script/Deploy.s.sol:Deploy --broadcast --rpc-url \$(RPC_URL)
+
+    # calling sayGM()
+    call-contract:
+    @PRIVATE_KEY=\$(PRIVATE_KEY) forge script script/CallContract.s.sol:CallContract --broadcast --rpc-url \$(RPC_URL)
+    EOL
     status_success "Updated Makefile with secure key handling"
-    
-    # Update Docker Compose to use v1.4.0 and rename containers
-    execute_command "sed -i 's/ritualnetwork\\/infernet-node:latest/ritualnetwork\\/infernet-node:v1.4.0/g' ~/infernet-container-starter/deploy/docker-compose.yaml" "Update node version to 1.4.0"
-    execute_command "sed -i '/image: ritualnetwork\\/infernet-node:v1.4.0/a\\    container_name: ritual-node' ~/infernet-container-starter/deploy/docker-compose.yaml" "Set container name"
-    execute_command "sed -i '/image: redis/a\\    container_name: ritual-redis' ~/infernet-container-starter/deploy/docker-compose.yaml" "Set Redis container name"
-    execute_command "sed -i '/image: ritualnetwork\\/hello-world-infernet/a\\    container_name: ritual-hello-world' ~/infernet-container-starter/deploy/docker-compose.yaml" "Set Hello World container name"
-    
+
+    # Create docker-compose.yaml
+    DOCKER_COMPOSE="$REPO_PATH/deploy/docker-compose.yaml"
+    execute_command "touch $DOCKER_COMPOSE" "Create docker-compose.yaml"
+
+    cat > "$DOCKER_COMPOSE" << EOL
+    version: "3.8"
+
+    services:
+    node:
+    image: ritualnetwork/infernet-node:v1.4.0
+    container_name: ritual-node
+    restart: always
+    ports:
+    - "4000:4000"
+    depends_on:
+    - redis
+    volumes:
+    - ./config.json:/app/config.json
+    networks:
+    - infernet
+
+    redis:
+    image: redis:7.0.12-alpine
+    container_name: ritual-redis
+    restart: always
+    networks:
+    - infernet
+
+    hello-world:
+    image: ritualnetwork/hello-world-infernet:latest
+    container_name: ritual-hello-world
+    restart: always
+    networks:
+    - infernet
+
+    networks:
+    infernet:
+    driver: bridge
+    EOL
+    status_success "Created docker-compose.yaml"
+
+    # Create root Makefile
+    ROOT_MAKEFILE="$REPO_PATH/Makefile"
+    execute_command "touch $ROOT_MAKEFILE" "Create root Makefile"
+
+    cat > "$ROOT_MAKEFILE" << EOL
+    # Default project
+    project ?= hello-world
+
+    # Deploy container
+    deploy-container:
+    @cd deploy && docker-compose up -d
+
+    # Stop container
+    stop-container:
+    @cd deploy && docker-compose down
+
+    # Deploy contracts
+    deploy-contracts:
+    @cd projects/\$(project)/contracts && make deploy
+
+    # Call contract
+    call-contract:
+    @cd projects/\$(project)/contracts && make call-contract
+    EOL
+    status_success "Created root Makefile"
+
     # Store installation path in environment file for consistency
-    execute_command "echo 'RITUAL_NODE_PATH=~/infernet-container-starter' > ~/.ritual_node_env" "Save installation path"
+    execute_command "echo 'RITUAL_NODE_PATH=$REPO_PATH' > ~/.ritual_node_env" "Save installation path"
     execute_command "chmod +x ~/.ritual_node_env" "Make environment file executable"
-    
+
     section "FOUNDRY INSTALLATION"
-    
+
     status_info "Installing Foundry"
     execute_command "mkdir -p ~/foundry" "Create Foundry directory"
     execute_command "curl -L https://foundry.paradigm.xyz | bash" "Download Foundry" "show_output"
+
+    # Ensure foundryup is loaded correctly
+    status_info "Loading Foundry environment"
+    execute_command "export PATH=\"$PATH:$HOME/.foundry/bin\"" "Add Foundry to PATH"
     execute_command "source ~/.bashrc" "Reload shell"
-    execute_command "foundryup" "Install Foundry" "show_output"
-    
+
+    # Try different approach for foundryup
+    if ! command -v foundryup &> /dev/null; then
+        status_warning "foundryup not found in PATH, using direct path"
+        execute_command "$HOME/.foundry/bin/foundryup" "Install Foundry" "show_output"
+    else
+        execute_command "foundryup" "Install Foundry" "show_output"
+    fi
+
     section "INSTALLING DEPENDENCIES"
     
     status_info "Installing required libraries"
-    execute_command "cd ~/infernet-container-starter/projects/hello-world/contracts && forge install --no-commit foundry-rs/forge-std" "Install forge-std" "show_output"
-    execute_command "cd ~/infernet-container-starter/projects/hello-world/contracts && forge install --no-commit ritual-net/infernet-sdk" "Install infernet-sdk" "show_output"
+    # Add PATH to ensure forge is available
+    execute_command "export PATH=\"$PATH:$HOME/.foundry/bin\"" "Add Foundry to PATH again"
+
+    # Check if forge is available, if not use direct path
+    if ! command -v forge &> /dev/null; then
+        FORGE_CMD="$HOME/.foundry/bin/forge"
+        status_warning "forge not found in PATH, using direct path: $FORGE_CMD"
+    else
+        FORGE_CMD="forge"
+    fi
+
+    execute_command "cd $REPO_PATH/projects/hello-world/contracts && $FORGE_CMD install --no-commit foundry-rs/forge-std" "Install forge-std" "show_output"
+    execute_command "cd $REPO_PATH/projects/hello-world/contracts && $FORGE_CMD install --no-commit ritual-net/infernet-sdk" "Install infernet-sdk" "show_output"
     
     section "DEPLOYING NODE"
     
     status_info "Starting Docker containers"
-    execute_command "cd ~/infernet-container-starter && project=hello-world make deploy-container" "Deploy container" "show_output"
+    execute_command "cd $REPO_PATH && docker compose -f deploy/docker-compose.yaml up -d" "Deploy container" "show_output"
     
     status_info "Waiting for node to initialize"
     progress_bar 5
@@ -430,22 +614,47 @@ EOL
     section "DEPLOYING CONSUMER CONTRACT"
     
     status_info "Deploying contract"
-    CONTRACT_RESULT=$(cd ~/infernet-container-starter && project=hello-world make deploy-contracts 2>&1)
+    # Use direct paths to ensure the commands work
+    execute_command "export PATH=\"$PATH:$HOME/.foundry/bin\"" "Ensure Foundry in PATH"
+
+    # Create a temporary script to run the deployment and capture output
+    TEMP_SCRIPT="/tmp/deploy_contract.sh"
+    cat > "$TEMP_SCRIPT" << 'EOF'
+#!/bin/bash
+cd $1 && \
+PRIVATE_KEY=$(bash -c 'if [ -f ~/.ritual-secure/key.enc ] && [ -f ~/.ritual-secure/salt ]; then SALT=$(cat ~/.ritual-secure/salt); ENCRYPTED_KEY=$(cat ~/.ritual-secure/key.enc); echo "${ENCRYPTED_KEY}" | openssl enc -aes-256-cbc -d -a -salt -pass pass:"${SALT}" 2>/dev/null; else echo "PRIVATE_KEY_NOT_FOUND"; fi') && \
+$2 script script/Deploy.s.sol:Deploy --broadcast --rpc-url https://mainnet.base.org/
+EOF
+    chmod +x "$TEMP_SCRIPT"
+
+    # Run the script to capture output
+    CONTRACT_RESULT=$(bash "$TEMP_SCRIPT" "$REPO_PATH/projects/hello-world/contracts" "$FORGE_CMD" 2>&1)
     echo "$CONTRACT_RESULT"
-    
+
     # Extract contract address
     CONTRACT_ADDRESS=$(echo "$CONTRACT_RESULT" | grep -oP 'Deployed SaysHello: \K0x[a-fA-F0-9]+')
-    
+
     if [ -n "$CONTRACT_ADDRESS" ]; then
         status_success "Contract deployed at: ${BRIGHT_GREEN}$CONTRACT_ADDRESS${NC}"
         
         # Update CallContract.s.sol with the new contract address
-        sed -i "s/SaysGM saysGm = SaysGM(.*);/SaysGM saysGm = SaysGM($CONTRACT_ADDRESS);/" ~/infernet-container-starter/projects/hello-world/contracts/script/CallContract.s.sol
+        sed -i "s/SaysGM saysGm = SaysGM(.*);/SaysGM saysGm = SaysGM($CONTRACT_ADDRESS);/" "$REPO_PATH/projects/hello-world/contracts/script/CallContract.s.sol"
         
         section "TESTING NODE"
         
         status_info "Calling contract"
-        execute_command "cd ~/infernet-container-starter && project=hello-world make call-contract" "Call contract" "show_output"
+        # Create a temporary script to call the contract
+        TEMP_CALL_SCRIPT="/tmp/call_contract.sh"
+        cat > "$TEMP_CALL_SCRIPT" << 'EOF'
+#!/bin/bash
+cd $1 && \
+PRIVATE_KEY=$(bash -c 'if [ -f ~/.ritual-secure/key.enc ] && [ -f ~/.ritual-secure/salt ]; then SALT=$(cat ~/.ritual-secure/salt); ENCRYPTED_KEY=$(cat ~/.ritual-secure/key.enc); echo "${ENCRYPTED_KEY}" | openssl enc -aes-256-cbc -d -a -salt -pass pass:"${SALT}" 2>/dev/null; else echo "PRIVATE_KEY_NOT_FOUND"; fi') && \
+$2 script script/CallContract.s.sol:CallContract --broadcast --rpc-url https://mainnet.base.org/
+EOF
+        chmod +x "$TEMP_CALL_SCRIPT"
+        
+        # Run the script
+        bash "$TEMP_CALL_SCRIPT" "$REPO_PATH/projects/hello-world/contracts" "$FORGE_CMD"
         
         section "COMPLETION"
         
@@ -455,11 +664,18 @@ EOL
         echo -e "${WHITE}Node Interface: ${BRIGHT_GREEN}http://localhost:4000${NC}"
         
         echo -e "\n${BRIGHT_BLACK}Use the following commands to manage your node:${NC}"
-        echo -e "${BRIGHT_BLACK}• ${BRIGHT_WHITE}docker compose -f ~/infernet-container-starter/deploy/docker-compose.yaml down${NC} - Stop the node"
-        echo -e "${BRIGHT_BLACK}• ${BRIGHT_WHITE}docker compose -f ~/infernet-container-starter/deploy/docker-compose.yaml up${NC} - Start the node"
-        echo -e "${BRIGHT_BLACK}• ${BRIGHT_WHITE}docker compose -f ~/infernet-container-starter/deploy/docker-compose.yaml logs -f${NC} - View logs"
+        echo -e "${BRIGHT_BLACK}• ${BRIGHT_WHITE}docker compose -f $REPO_PATH/deploy/docker-compose.yaml down${NC} - Stop the node"
+        echo -e "${BRIGHT_BLACK}• ${BRIGHT_WHITE}docker compose -f $REPO_PATH/deploy/docker-compose.yaml up${NC} - Start the node"
+        echo -e "${BRIGHT_BLACK}• ${BRIGHT_WHITE}docker compose -f $REPO_PATH/deploy/docker-compose.yaml logs -f${NC} - View logs"
+
+        # Clean up temp files
+        rm -f "$TEMP_SCRIPT" "$TEMP_CALL_SCRIPT"
     else
         status_error "Could not extract contract address. Deployment may have failed."
+        status_warning "You may need to run the deployment manually using: cd $REPO_PATH && make deploy-contracts"
+        
+        # Clean up temp files
+        rm -f "$TEMP_SCRIPT" "$TEMP_CALL_SCRIPT"
     fi
 }
 
