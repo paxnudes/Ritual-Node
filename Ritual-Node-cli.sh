@@ -94,10 +94,10 @@ handle_choice() {
     
     case $1 in
         1)
-            "${SCRIPT_DIR}/Ritual-Node/run.sh"
+            "${SCRIPT_DIR}/run.sh"
             ;;
         2)
-            "${SCRIPT_DIR}/Ritual-Node/monitor.sh"
+            "${SCRIPT_DIR}/monitor.sh"
             ;;
         3)
             start_node
