@@ -190,14 +190,21 @@ install_ritual_node() {
     # Check for prerequisites
     section "SYSTEM VALIDATION"
     
-    # Check internet connectivity
+    # Check internet connectivity with multiple fallbacks
     status_info "Checking internet connectivity"
-    if ping -c 1 google.com > /dev/null 2>&1; then
+    if ping -c 1 google.com > /dev/null 2>&1 || ping -c 1 cloudflare.com > /dev/null 2>&1 || ping -c 1 github.com > /dev/null 2>&1 || curl -s --connect-timeout 5 https://api.github.com > /dev/null 2>&1; then
         status_success "Internet connection is available"
     else
-        status_error "No internet connection detected. This installation requires internet access."
-        echo -e "${YELLOW}Please check your connection and try again.${NC}"
-        exit 1
+        status_warning "Internet connectivity check failed"
+        echo -e "${YELLOW}Would you like to continue anyway? This is not recommended unless you're sure you have internet access. (y/n)${NC}"
+        read -r continue_anyway
+        if [[ ! "$continue_anyway" =~ ^[Yy]$ ]]; then
+            status_error "Installation aborted due to no internet connection detected."
+            echo -e "${YELLOW}Please check your connection and try again.${NC}"
+            exit 1
+        else
+            status_warning "Proceeding without confirmed internet connectivity - this may cause errors later"
+        fi
     fi
     
     # Check disk space
