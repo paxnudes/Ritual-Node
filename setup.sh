@@ -902,6 +902,7 @@ PRIVATE_KEY=$PRIVATE_KEY $FORGE_CMD script script/CallContract.s.sol:CallContrac
 else
     status_error "Failed to create deployment script"
 fi
+}
 
 # Function to validate docker installation
 validate_docker() {
