@@ -378,33 +378,33 @@ EOL
     execute_command "touch $DEPLOY_FILE" "Create Deploy.s.sol file"
 
     cat > "$DEPLOY_FILE" << EOL
-    // SPDX-License-Identifier: BSD-3-Clause-Clear
-    pragma solidity ^0.8.13;
+// SPDX-License-Identifier: BSD-3-Clause-Clear
+pragma solidity ^0.8.13;
 
-    import {Script, console2} from "forge-std/Script.sol";
-    import {SaysGM} from "../src/SaysGM.sol";
+import {Script, console2} from "forge-std/Script.sol";
+import {SaysGM} from "../src/SaysGM.sol";
 
-    contract Deploy is Script {
-        function run() public {
-            // Setup wallet
-            uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
-            vm.startBroadcast(deployerPrivateKey);
+contract Deploy is Script {
+    function run() public {
+        // Setup wallet
+        uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
+        vm.startBroadcast(deployerPrivateKey);
 
-            // Log address
-            address deployerAddress = vm.addr(deployerPrivateKey);
-            console2.log("Loaded deployer: ", deployerAddress);
+        // Log address
+        address deployerAddress = vm.addr(deployerPrivateKey);
+        console2.log("Loaded deployer: ", deployerAddress);
 
-            address registry = 0x3B1554f346DFe5c482Bb4BA31b880c1C18412170;
-            // Create consumer
-            SaysGM saysGm = new SaysGM(registry);
-            console2.log("Deployed SaysHello: ", address(saysGm));
+        address registry = 0x3B1554f346DFe5c482Bb4BA31b880c1C18412170;
+        // Create consumer
+        SaysGM saysGm = new SaysGM(registry);
+        console2.log("Deployed SaysHello: ", address(saysGm));
 
-            // Execute
-            vm.stopBroadcast();
-            vm.broadcast();
-        }
+        // Execute
+        vm.stopBroadcast();
+        vm.broadcast();
     }
-    EOL
+}
+EOL
     status_success "Updated Deploy.s.sol"
 
     # Create SaysGM.sol file in src directory
@@ -412,31 +412,31 @@ EOL
     execute_command "touch $SRC_FILE" "Create SaysGM.sol file"
 
     cat > "$SRC_FILE" << EOL
-    // SPDX-License-Identifier: BSD-3-Clause-Clear
-    pragma solidity ^0.8.13;
+// SPDX-License-Identifier: BSD-3-Clause-Clear
+pragma solidity ^0.8.13;
 
-    import {Infernet} from "infernet-sdk/Infernet.sol";
-    import {InfernetConsumer} from "infernet-sdk/InfernetConsumer.sol";
+import {Infernet} from "infernet-sdk/Infernet.sol";
+import {InfernetConsumer} from "infernet-sdk/InfernetConsumer.sol";
 
-    contract SaysGM is InfernetConsumer {
-        // Emitted when sayGM is called
-        event GMReceived(bytes data);
+contract SaysGM is InfernetConsumer {
+    // Emitted when sayGM is called
+    event GMReceived(bytes data);
 
-        // Constructor
-        constructor(address registry) InfernetConsumer(registry) {}
+    // Constructor
+    constructor(address registry) InfernetConsumer(registry) {}
 
-        // Say GM to someone
-        function sayGM(
-            address container,
-            string calldata name
-        ) external returns (bytes memory) {
-            bytes memory encoded = abi.encode(name);
-            bytes memory response = _callInfernet(container, encoded);
-            emit GMReceived(response);
-            return response;
-        }
+    // Say GM to someone
+    function sayGM(
+        address container,
+        string calldata name
+    ) external returns (bytes memory) {
+        bytes memory encoded = abi.encode(name);
+        bytes memory response = _callInfernet(container, encoded);
+        emit GMReceived(response);
+        return response;
     }
-    EOL
+}
+EOL
     status_success "Created SaysGM.sol"
 
     # Create CallContract.s.sol file
@@ -444,33 +444,33 @@ EOL
     execute_command "touch $CALL_FILE" "Create CallContract.s.sol file"
 
     cat > "$CALL_FILE" << EOL
-    // SPDX-License-Identifier: BSD-3-Clause-Clear
-    pragma solidity ^0.8.13;
+// SPDX-License-Identifier: BSD-3-Clause-Clear
+pragma solidity ^0.8.13;
 
-    import {Script, console2} from "forge-std/Script.sol";
-    import {SaysGM} from "../src/SaysGM.sol";
+import {Script, console2} from "forge-std/Script.sol";
+import {SaysGM} from "../src/SaysGM.sol";
 
-    contract CallContract is Script {
-        function run() public {
-            // Setup wallet
-            uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
-            vm.startBroadcast(deployerPrivateKey);
+contract CallContract is Script {
+    function run() public {
+        // Setup wallet
+        uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
+        vm.startBroadcast(deployerPrivateKey);
 
-            // Log address
-            address deployerAddress = vm.addr(deployerPrivateKey);
-            console2.log("Loaded deployer: ", deployerAddress);
+        // Log address
+        address deployerAddress = vm.addr(deployerPrivateKey);
+        console2.log("Loaded deployer: ", deployerAddress);
 
-            // Call contract
-            // This will be updated with the actual contract address after deployment
-            SaysGM saysGm = SaysGM(0x0000000000000000000000000000000000000000);
-            console2.log("Calling sayGM...");
-            bytes memory res = saysGm.sayGM(0x8ad64fa5a5e1bd7f0eb750e45baf3e0a1499a549, "Ritual");
-            console2.log("Response: ", string(res));
+        // Call contract
+        // This will be updated with the actual contract address after deployment
+        SaysGM saysGm = SaysGM(0x0000000000000000000000000000000000000000);
+        console2.log("Calling sayGM...");
+        bytes memory res = saysGm.sayGM(0x8ad64fa5a5e1bd7f0eb750e45baf3e0a1499a549, "Ritual");
+        console2.log("Response: ", string(res));
 
-            vm.stopBroadcast();
-        }
+        vm.stopBroadcast();
     }
-    EOL
+}
+EOL
     status_success "Created CallContract.s.sol"
 
     # Update the Makefile
@@ -478,22 +478,22 @@ EOL
     execute_command "touch $MAKEFILE" "Create Makefile"
 
     cat > "$MAKEFILE" << EOL
-    # phony targets are targets that don't actually create a file
-    .phony: deploy
+# phony targets are targets that don't actually create a file
+.phony: deploy
 
-    # Get private key from secure storage
-    include ~/.ritual_node_env
-    PRIVATE_KEY := \$(shell bash -c 'if [ -f ~/.ritual-secure/key.enc ] && [ -f ~/.ritual-secure/salt ]; then SALT=\$\$(cat ~/.ritual-secure/salt); ENCRYPTED_KEY=\$\$(cat ~/.ritual-secure/key.enc); echo "\$\${ENCRYPTED_KEY}" | openssl enc -aes-256-cbc -d -a -salt -pass pass:"\$\${SALT}" 2>/dev/null; else echo "PRIVATE_KEY_NOT_FOUND"; fi')
-    RPC_URL := https://mainnet.base.org/
+# Get private key from secure storage
+include ~/.ritual_node_env
+PRIVATE_KEY := \$(shell bash -c 'if [ -f ~/.ritual-secure/key.enc ] && [ -f ~/.ritual-secure/salt ]; then SALT=\$\$(cat ~/.ritual-secure/salt); ENCRYPTED_KEY=\$\$(cat ~/.ritual-secure/key.enc); echo "\$\${ENCRYPTED_KEY}" | openssl enc -aes-256-cbc -d -a -salt -pass pass:"\$\${SALT}" 2>/dev/null; else echo "PRIVATE_KEY_NOT_FOUND"; fi')
+RPC_URL := https://mainnet.base.org/
 
-    # deploying the contract
-    deploy:
-    @PRIVATE_KEY=\$(PRIVATE_KEY) forge script script/Deploy.s.sol:Deploy --broadcast --rpc-url \$(RPC_URL)
+# deploying the contract
+deploy:
+	@PRIVATE_KEY=\$(PRIVATE_KEY) forge script script/Deploy.s.sol:Deploy --broadcast --rpc-url \$(RPC_URL)
 
-    # calling sayGM()
-    call-contract:
-    @PRIVATE_KEY=\$(PRIVATE_KEY) forge script script/CallContract.s.sol:CallContract --broadcast --rpc-url \$(RPC_URL)
-    EOL
+# calling sayGM()
+call-contract:
+	@PRIVATE_KEY=\$(PRIVATE_KEY) forge script script/CallContract.s.sol:CallContract --broadcast --rpc-url \$(RPC_URL)
+EOL
     status_success "Updated Makefile with secure key handling"
 
     # Create docker-compose.yaml
@@ -501,40 +501,40 @@ EOL
     execute_command "touch $DOCKER_COMPOSE" "Create docker-compose.yaml"
 
     cat > "$DOCKER_COMPOSE" << EOL
-    version: "3.8"
+version: "3.8"
 
-    services:
-    node:
+services:
+  node:
     image: ritualnetwork/infernet-node:v1.4.0
     container_name: ritual-node
     restart: always
     ports:
-    - "4000:4000"
+      - "4000:4000"
     depends_on:
-    - redis
+      - redis
     volumes:
-    - ./config.json:/app/config.json
+      - ./config.json:/app/config.json
     networks:
-    - infernet
+      - infernet
 
-    redis:
+  redis:
     image: redis:7.0.12-alpine
     container_name: ritual-redis
     restart: always
     networks:
-    - infernet
+      - infernet
 
-    hello-world:
+  hello-world:
     image: ritualnetwork/hello-world-infernet:latest
     container_name: ritual-hello-world
     restart: always
     networks:
-    - infernet
+      - infernet
 
-    networks:
-    infernet:
+networks:
+  infernet:
     driver: bridge
-    EOL
+EOL
     status_success "Created docker-compose.yaml"
 
     # Create root Makefile
@@ -542,25 +542,25 @@ EOL
     execute_command "touch $ROOT_MAKEFILE" "Create root Makefile"
 
     cat > "$ROOT_MAKEFILE" << EOL
-    # Default project
-    project ?= hello-world
+# Default project
+project ?= hello-world
 
-    # Deploy container
-    deploy-container:
-    @cd deploy && docker-compose up -d
+# Deploy container
+deploy-container:
+	@cd deploy && docker-compose up -d
 
-    # Stop container
-    stop-container:
-    @cd deploy && docker-compose down
+# Stop container
+stop-container:
+	@cd deploy && docker-compose down
 
-    # Deploy contracts
-    deploy-contracts:
-    @cd projects/\$(project)/contracts && make deploy
+# Deploy contracts
+deploy-contracts:
+	@cd projects/\$(project)/contracts && make deploy
 
-    # Call contract
-    call-contract:
-    @cd projects/\$(project)/contracts && make call-contract
-    EOL
+# Call contract
+call-contract:
+	@cd projects/\$(project)/contracts && make call-contract
+EOL
     status_success "Created root Makefile"
 
     # Store installation path in environment file for consistency
