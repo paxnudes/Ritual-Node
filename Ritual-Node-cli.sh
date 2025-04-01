@@ -8,6 +8,12 @@ else
     RITUAL_NODE_PATH=~/infernet-container-starter
 fi
 
+# Check for command line arguments
+if [ "$1" == "--version" ]; then
+    echo "Ritual Node Management System v1.0.0"
+    exit 0
+fi
+
 # Colors and formatting
 BOLD="\033[1m"
 DIM="\033[2m"
