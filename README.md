@@ -1,5 +1,11 @@
 # Ritual Node - Management System
 
+![Ritual Node](https://img.shields.io/badge/Ritual-Node-magenta)
+![Shell Script](https://img.shields.io/badge/Shell_Script-100%25-brightgreen)
+![License](https://img.shields.io/badge/License-MIT-blue)
+
+An elegant management system for deploying, monitoring, and managing Ritual Nodes with encrypted key storage and professional terminal interfaces.
+
 A comprehensive toolset for deploying, managing, and monitoring a Ritual Node with an elegant terminal interface.
 
 ## Overview
